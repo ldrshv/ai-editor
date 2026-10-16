@@ -144,7 +144,7 @@ class ChangeService
                 $this->assertAliasFree($value, (int) $resource->get('parent'), (string) $resource->get('context_key'), $id);
             }
 
-            $old = $resource->get($field);
+            $old = $this->fieldValue($resource, $field);
 
             if (!Format::same($old, $value)) {
                 $fields[$field] = ['old' => $old, 'new' => $value];
@@ -185,7 +185,7 @@ class ChangeService
         $internal = [
             'op' => 'update',
             'id' => $id,
-            'editedon' => (int) $resource->get('editedon'),
+            'editedon' => Format::timestamp($resource->get('editedon')),
             'fields' => $fields,
             'tvs' => $tvs,
         ];
@@ -411,7 +411,7 @@ class ChangeService
             return [['status' => 'error', 'code' => 'NOT_FOUND', 'message' => 'Ресурс не найден'], null];
         }
 
-        if ((int) $resource->get('editedon') !== (int) $operation['editedon']) {
+        if (Format::timestamp($resource->get('editedon')) !== (int) $operation['editedon']) {
             return [[
                 'status' => 'error',
                 'code' => 'CONFLICT',
@@ -567,7 +567,7 @@ class ChangeService
 
                 $plan[] = ['op' => 'delete', 'id' => $id, 'pagetitle' => (string) $resource->get('pagetitle')];
 
-                if ((int) $resource->get('editedon') > (int) $change['created'] + 5) {
+                if (Format::timestamp($resource->get('editedon')) > (int) $change['created'] + 5) {
                     $conflicts[] = ['id' => $id, 'message' => 'Созданный ресурс правили после создания'];
                 }
 
@@ -579,12 +579,14 @@ class ChangeService
             $shown = [];
 
             foreach ((array) $entry['fields'] as $field => $values) {
-                if (!Format::same($resource->get($field), $values['new'])) {
+                $now = $this->fieldValue($resource, $field);
+
+                if (!Format::same($now, $values['new'])) {
                     $conflicts[] = ['id' => $id, 'field' => $field, 'message' => 'Поле изменили после правки'];
                 }
 
                 $fields[$field] = $values['old'];
-                $shown[] = $this->displayChange($field, $resource->get($field), $values['old']);
+                $shown[] = $this->displayChange($field, $now, $values['old']);
             }
 
             $current = $this->reader->tvValues($id, (int) $resource->get('template'));
@@ -682,6 +684,7 @@ class ChangeService
 
     /**
      * Процессоры ожидают даты строкой, как из формы админки.
+     * Значение может быть timestamp (из запроса) или строкой (из toArray()).
      */
     private function formatDates(array $data): array
     {
@@ -690,11 +693,21 @@ class ChangeService
                 continue;
             }
 
-            $value = (int) $data[$field];
+            $value = Format::timestamp($data[$field]);
             $data[$field] = $value > 0 ? date('Y-m-d H:i:s', $value) : '';
         }
 
         return $data;
+    }
+
+    /**
+     * Текущее значение поля ресурса: даты — timestamp, как в Format::input().
+     */
+    private function fieldValue(\modResource $resource, string $field)
+    {
+        $value = $resource->get($field);
+
+        return in_array($field, self::DATE_FIELDS, true) ? Format::timestamp($value) : $value;
     }
 
     private function processorError(array $response): array

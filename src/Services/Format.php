@@ -11,9 +11,30 @@ class Format
     public const INT_FIELDS = ['id', 'parent', 'template', 'menuindex', 'createdby', 'editedby'];
     public const DATE_FIELDS = ['pub_date', 'unpub_date', 'createdon', 'editedon', 'publishedon', 'deletedon'];
 
+    /**
+     * Timestamp из значения MODX: число, строка «Y-m-d H:i:s» или пусто.
+     *
+     * MODX 2 отдаёт даты через get() и toArray() строкой, поэтому (int)
+     * оставлял от неё только год — отсюда даты 1970-01-01.
+     */
+    public static function timestamp($value): int
+    {
+        if ($value === null || $value === '' || $value === 0 || $value === '0' || $value === '0000-00-00 00:00:00') {
+            return 0;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+
+        $timestamp = strtotime((string) $value);
+
+        return $timestamp === false ? 0 : $timestamp;
+    }
+
     public static function date($timestamp): ?string
     {
-        $timestamp = (int) $timestamp;
+        $timestamp = self::timestamp($timestamp);
 
         return $timestamp > 0 ? date('c', $timestamp) : null;
     }
