@@ -2,6 +2,7 @@
 
 namespace AiEditor\Controllers;
 
+use AiEditor\Services\ProcessorRunner;
 use AiEditor\Services\Settings;
 use AiEditor\Services\SiteSchema;
 
@@ -15,6 +16,8 @@ class Site extends Controller
                 'module' => 'ai-editor',
                 'version' => (string) Settings::get('version', '1.0.0'),
                 'time' => date('c'),
+                // От кого пишем и какие права есть в mgr; ошибка настройки не ломает ping
+                'user' => (new ProcessorRunner($this->modx))->diagnostics(),
             ];
         });
     }

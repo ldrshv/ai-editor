@@ -23,11 +23,15 @@ class ChangeService
     /** @var ResourceReader */
     private $reader;
 
+    /** @var ProcessorRunner */
+    private $runner;
+
     public function __construct(modX $modx)
     {
         $this->modx = $modx;
         $this->storage = new Storage();
         $this->reader = new ResourceReader($modx);
+        $this->runner = new ProcessorRunner($modx);
     }
 
     /* ---------------------------------------------------------------------
@@ -173,6 +177,17 @@ class ChangeService
             }
 
             $finalTvs[$name] = $value;
+        }
+
+        // Права проверяем до согласия, а не только в процессоре при apply
+        if ($fields !== [] || $tvs !== []) {
+            $permissions = ['save_document'];
+
+            if (isset($fields['published'])) {
+                $permissions[] = (int) $fields['published']['new'] ? 'publish_document' : 'unpublish_document';
+            }
+
+            $this->runner->assertCan($permissions, [$id => ['save']], 'изменение ресурса ' . $id);
         }
 
         $warnings = [];
@@ -322,6 +337,22 @@ class ChangeService
         if (!array_key_exists('published', $fields)) {
             $fields['published'] = 0;
         }
+
+        // Права проверяем до согласия. У родителя по ref (создаётся здесь же) политик ещё нет.
+        $permissions = ['new_document'];
+        $policies = [];
+
+        if ($parentRef === null && $parentId === 0) {
+            $permissions[] = 'new_document_in_root';
+        } elseif ($parentRef === null) {
+            $policies[$parentId] = ['add_children'];
+        }
+
+        if ((int) $fields['published']) {
+            $permissions[] = 'publish_document';
+        }
+
+        $this->runner->assertCan($permissions, $policies, 'создание страницы');
 
         /** @var \modResource $draft */
         $draft = $this->modx->newObject('modResource');
@@ -522,7 +553,7 @@ class ChangeService
             return [['status' => 'skipped', 'message' => 'Изменений нет'], null];
         }
 
-        $response = (new ProcessorRunner($this->modx))->run('resource/update', $this->updateData($resource, $fields, $tvs));
+        $response = $this->runner->run('resource/update', $this->updateData($resource, $fields, $tvs));
 
         if (!$response['ok']) {
             return [$this->processorError($response), null];
@@ -549,7 +580,7 @@ class ChangeService
             $data['tv' . (int) $tv['id']] = $tv['value'];
         }
 
-        $response = (new ProcessorRunner($this->modx))->run('resource/create', $this->formatDates($data));
+        $response = $this->runner->run('resource/create', $this->formatDates($data));
 
         if (!$response['ok']) {
             return [$this->processorError($response), null];
@@ -700,8 +731,32 @@ class ChangeService
             return $item;
         }, $plan);
 
+        // Права на откат: удаление созданных страниц и возврат полей
+        $permissions = [];
+
+        foreach ($plan as $item) {
+            $permissions[] = $item['op'] === 'delete' ? 'delete_document' : 'save_document';
+        }
+
+        $missing = $permissions !== [] ? $this->runner->missing($permissions) : [];
+
         if ($dryRun) {
-            return ['change_id' => $changeId, 'dry_run' => true, 'plan' => $publicPlan, 'conflicts' => $conflicts];
+            return [
+                'change_id' => $changeId,
+                'dry_run' => true,
+                'plan' => $publicPlan,
+                'conflicts' => $conflicts,
+                'missing_permissions' => $missing,
+            ];
+        }
+
+        if ($missing !== []) {
+            throw new ApiException(
+                'PERMISSION_DENIED',
+                'У пользователя ' . $this->runner->username() . ' в контексте mgr нет прав на откат: ' . implode(', ', $missing),
+                403,
+                ['user' => $this->runner->username(), 'missing' => $missing]
+            );
         }
 
         if ($conflicts !== [] && !$force) {
@@ -713,7 +768,7 @@ class ChangeService
             );
         }
 
-        $runner = new ProcessorRunner($this->modx);
+        $runner = $this->runner;
         $results = [];
 
         foreach ($plan as $item) {
@@ -805,6 +860,8 @@ class ChangeService
             'code' => 'PROCESSOR_ERROR',
             'message' => $response['message'] !== '' ? $response['message'] : 'Процессор вернул ошибку',
             'errors' => $response['errors'] ?: null,
+            'user' => $this->runner->username(),
+            'context' => 'mgr',
         ], static function ($value) {
             return $value !== null;
         });
