@@ -6,7 +6,7 @@
  * ai_editor.api_key, ai_editor.allowed_ips, ai_editor.user.
  */
 return [
-    'version' => '1.2.2',
+    'version' => '1.2.3',
 
     // TV редактора блоков: не отдаётся и не меняется на этом этапе
     'blocks_tv' => 97,

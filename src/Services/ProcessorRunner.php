@@ -73,12 +73,14 @@ class ProcessorRunner
         $previousUser = $this->modx->user;
         $previousContext = $this->modx->context ? (string) $this->modx->context->get('key') : 'web';
 
+        // До переключения: switchContext() проверяет право load на mgr от текущего пользователя
+        $this->modx->user = $user;
+
         if ($previousContext !== 'mgr') {
             $this->modx->switchContext('mgr');
         }
 
-        // switchContext() может заново загрузить пользователя сессии (анонима),
-        // поэтому ai_editor.user подставляем уже после переключения контекста
+        // После переключения: MODX загружает пользователя сессии для нового контекста (анонима)
         $this->modx->user = $user;
 
         try {
@@ -110,7 +112,10 @@ class ProcessorRunner
 
             return $fn($this->modx, $user);
         } finally {
-            // Сначала контекст, потом пользователь: switchContext() может снова его заменить
+            // Возвращаем контекст, пока в $modx->user наш пользователь (проверка load),
+            // потом пользователя запроса: switchContext() может его заменить
+            $this->modx->user = $user;
+
             if (!$this->modx->context || (string) $this->modx->context->get('key') !== $previousContext) {
                 $this->modx->switchContext($previousContext);
             }
