@@ -73,11 +73,13 @@ class ProcessorRunner
         $previousUser = $this->modx->user;
         $previousContext = $this->modx->context ? (string) $this->modx->context->get('key') : 'web';
 
-        $this->modx->user = $user;
-
         if ($previousContext !== 'mgr') {
             $this->modx->switchContext('mgr');
         }
+
+        // switchContext() может заново загрузить пользователя сессии (анонима),
+        // поэтому ai_editor.user подставляем уже после переключения контекста
+        $this->modx->user = $user;
 
         try {
             $context = $this->modx->context ? (string) $this->modx->context->get('key') : '';
@@ -92,15 +94,28 @@ class ProcessorRunner
                 );
             }
 
+            $current = $this->modx->user;
+
+            if (!$current || (int) $current->get('id') !== (int) $user->get('id')) {
+                throw new ApiException(
+                    'USER_ERROR',
+                    'Не удалось работать от пользователя ' . $user->get('username')
+                        . ', текущий: ' . ($current ? (string) $current->get('username') : 'нет'),
+                    500,
+                    ['user' => (string) $user->get('username'), 'current_id' => $current ? (int) $current->get('id') : 0]
+                );
+            }
+
             $this->loadLexicon();
 
             return $fn($this->modx, $user);
         } finally {
-            $this->modx->user = $previousUser;
-
+            // Сначала контекст, потом пользователь: switchContext() может снова его заменить
             if (!$this->modx->context || (string) $this->modx->context->get('key') !== $previousContext) {
                 $this->modx->switchContext($previousContext);
             }
+
+            $this->modx->user = $previousUser;
         }
     }
 
@@ -187,29 +202,40 @@ class ProcessorRunner
     }
 
     /**
-     * Сводка для /ping: от кого пишем и какие права есть в mgr.
+     * Сводка для /ping: от кого пишем, от кого реально шла проверка и какие права есть в mgr.
      */
     public function diagnostics(): array
     {
         try {
             $user = $this->user();
-            $permissions = $this->asUser(static function (modX $modx): array {
-                $result = [];
+            $checked = $this->asUser(static function (modX $modx): array {
+                $permissions = [];
 
                 foreach (self::DIAGNOSTIC_PERMISSIONS as $permission) {
-                    $result[$permission] = (bool) $modx->hasPermission($permission);
+                    $permissions[$permission] = (bool) $modx->hasPermission($permission);
                 }
 
-                return $result;
+                return [
+                    'permissions' => $permissions,
+                    'checked_as' => [
+                        'id' => $modx->user ? (int) $modx->user->get('id') : 0,
+                        'username' => $modx->user ? (string) $modx->user->get('username') : '',
+                        'sudo' => $modx->user ? (bool) $modx->user->get('sudo') : false,
+                    ],
+                    'context' => $modx->context ? (string) $modx->context->get('key') : '',
+                    'session_state' => (int) $modx->getSessionState(),
+                ];
             });
 
             return [
                 'username' => (string) $user->get('username'),
                 'id' => (int) $user->get('id'),
                 'sudo' => (bool) $user->get('sudo'),
-                'context' => 'mgr',
-                'permissions' => $permissions,
-                'missing' => array_keys(array_filter($permissions, static function (bool $allowed): bool {
+                'context' => $checked['context'],
+                'checked_as' => $checked['checked_as'],
+                'session_state' => $checked['session_state'],
+                'permissions' => $checked['permissions'],
+                'missing' => array_keys(array_filter($checked['permissions'], static function (bool $allowed): bool {
                     return !$allowed;
                 })),
             ];
