@@ -53,6 +53,9 @@ class ChangeService
         $display = [];
         $errors = [];
 
+        // ref создаваемых страниц => context_key, чтобы следующие операции могли ссылаться на них в parent
+        $refs = [];
+
         foreach (array_values($operations) as $index => $operation) {
             try {
                 if (!is_array($operation)) {
@@ -64,7 +67,8 @@ class ChangeService
                 if ($op === 'update') {
                     [$internal, $shown] = $this->prepareUpdate($index, $operation);
                 } elseif ($op === 'create') {
-                    [$internal, $shown] = $this->prepareCreate($index, $operation);
+                    [$internal, $shown] = $this->prepareCreate($index, $operation, $refs);
+                    $refs[$internal['ref']] = $internal['context_key'];
                 } else {
                     throw ApiException::validation('op должен быть update или create');
                 }
@@ -213,7 +217,10 @@ class ChangeService
         return [$internal, $shown];
     }
 
-    private function prepareCreate(int $index, array $operation): array
+    /**
+     * @param array $refs ref страниц, созданных раньше в этом предпросмотре => context_key
+     */
+    private function prepareCreate(int $index, array $operation, array $refs = []): array
     {
         $pageType = null;
 
@@ -225,21 +232,70 @@ class ChangeService
             }
         }
 
-        $parentId = (int) ($operation['parent'] ?? ($pageType['parent'] ?? 0));
+        $ref = trim((string) ($operation['ref'] ?? '')) ?: 'new' . ($index + 1);
 
-        if ($parentId <= 0) {
-            throw ApiException::validation('Не указан parent');
+        if (ctype_digit($ref)) {
+            throw ApiException::validation('ref не может быть числом, например new1', ['field' => 'ref']);
         }
 
-        /** @var \modResource|null $parent */
-        $parent = $this->modx->getObject('modResource', $parentId);
-
-        if (!$parent) {
-            throw ApiException::notFound('Родитель ' . $parentId . ' не найден');
+        if (isset($refs[$ref])) {
+            throw ApiException::validation('ref ' . $ref . ' уже используется в этом предпросмотре', ['field' => 'ref']);
         }
 
-        if (in_array($parentId, Settings::protectedIds(), true)) {
-            throw new ApiException('PROTECTED_RESOURCE', 'В ресурсе ' . $parentId . ' нельзя создавать страницы', 403);
+        // parent: ID раздела, 0 — корень контекста, строка — ref страницы из этого же предпросмотра
+        $parentRaw = array_key_exists('parent', $operation) ? $operation['parent'] : ($pageType['parent'] ?? null);
+        $parentRef = null;
+        $parentId = 0;
+
+        if ($parentRaw === null || $parentRaw === '' || is_bool($parentRaw) || is_array($parentRaw)) {
+            throw ApiException::validation(
+                'Не указан parent: ID раздела, 0 — корень сайта, или ref страницы, создаваемой раньше в этом предпросмотре',
+                ['field' => 'parent']
+            );
+        }
+
+        if (is_string($parentRaw) && !ctype_digit(trim($parentRaw))) {
+            $parentRef = trim($parentRaw);
+
+            if (!isset($refs[$parentRef])) {
+                throw ApiException::validation(
+                    'parent ' . $parentRef . ': нет такой ref среди предыдущих операций create этого предпросмотра',
+                    ['field' => 'parent', 'refs' => array_keys($refs)]
+                );
+            }
+
+            $context = (string) $refs[$parentRef];
+        } else {
+            $parentId = (int) $parentRaw;
+
+            if ($parentId < 0) {
+                throw ApiException::validation('parent не может быть отрицательным', ['field' => 'parent']);
+            }
+
+            if (in_array($parentId, Settings::protectedIds(), true)) {
+                throw new ApiException(
+                    'PROTECTED_RESOURCE',
+                    $parentId === 0 ? 'В корне сайта нельзя создавать страницы' : 'В ресурсе ' . $parentId . ' нельзя создавать страницы',
+                    403
+                );
+            }
+
+            if ($parentId === 0) {
+                $context = trim((string) ($operation['context'] ?? '')) ?: 'web';
+
+                if (!$this->modx->getCount('modContext', ['key' => $context])) {
+                    throw ApiException::validation('Контекст ' . $context . ' не найден', ['field' => 'context']);
+                }
+            } else {
+                /** @var \modResource|null $parent */
+                $parent = $this->modx->getObject('modResource', $parentId);
+
+                if (!$parent) {
+                    throw ApiException::notFound('Родитель ' . $parentId . ' не найден');
+                }
+
+                $context = (string) $parent->get('context_key');
+            }
         }
 
         $templateId = (int) ($operation['template'] ?? ($pageType['template'] ?? $this->modx->getOption('default_template')));
@@ -267,12 +323,15 @@ class ChangeService
             $fields['published'] = 0;
         }
 
-        $context = (string) $parent->get('context_key');
         /** @var \modResource $draft */
         $draft = $this->modx->newObject('modResource');
         $aliasSource = (string) ($fields['alias'] ?? '') !== '' ? (string) $fields['alias'] : (string) $fields['pagetitle'];
         $fields['alias'] = (string) $draft->cleanAlias($aliasSource);
-        $this->assertAliasFree($fields['alias'], $parentId, $context, 0);
+
+        // У родителя, который ещё не создан, детей нет — проверять alias в базе не нужно
+        if ($parentRef === null) {
+            $this->assertAliasFree($fields['alias'], $parentId, $context, 0);
+        }
 
         $templateTvs = $this->reader->tvValues(0, $templateId);
         $tvs = [];
@@ -287,12 +346,11 @@ class ChangeService
             $finalTvs[$name] = $value;
         }
 
-        $ref = trim((string) ($operation['ref'] ?? '')) ?: 'new' . ($index + 1);
-
         $internal = [
             'op' => 'create',
             'ref' => $ref,
             'parent' => $parentId,
+            'parent_ref' => $parentRef,
             'template' => $templateId,
             'context_key' => $context,
             'fields' => $fields,
@@ -311,11 +369,19 @@ class ChangeService
             $shownTvs[$name] = $this->displayValue('tv:' . $name, $tv['value']);
         }
 
+        if ($parentRef !== null) {
+            $shownParent = ['ref' => $parentRef, 'pagetitle' => 'Создаётся в этом предпросмотре'];
+        } elseif ($parentId === 0) {
+            $shownParent = ['id' => 0, 'pagetitle' => 'Корень сайта', 'context_key' => $context];
+        } else {
+            $shownParent = $this->reader->shortResource($parentId);
+        }
+
         $shown = [
             'index' => $index,
             'op' => 'create',
             'ref' => $ref,
-            'parent' => $this->reader->shortResource($parentId),
+            'parent' => $shownParent,
             'template' => $this->reader->shortTemplate($templateId),
             'alias' => $fields['alias'],
             'published' => (bool) $fields['published'],
@@ -352,12 +418,33 @@ class ChangeService
         $results = [];
         $journal = [];
 
+        // ref => ID созданных в этом применении страниц
+        $created = [];
+
         foreach ((array) $preview['operations'] as $index => $operation) {
             try {
                 if ($operation['op'] === 'update') {
                     [$result, $entry] = $this->applyUpdate($operation);
                 } else {
+                    if (!empty($operation['parent_ref'])) {
+                        $parentId = (int) ($created[$operation['parent_ref']] ?? 0);
+
+                        if ($parentId <= 0) {
+                            throw new ApiException(
+                                'PARENT_NOT_CREATED',
+                                'Родительская страница ' . $operation['parent_ref'] . ' не создана, эта страница пропущена',
+                                409
+                            );
+                        }
+
+                        $operation['parent'] = $parentId;
+                    }
+
                     [$result, $entry] = $this->applyCreate($operation);
+
+                    if ($entry !== null) {
+                        $created[(string) $operation['ref']] = (int) $entry['id'];
+                    }
                 }
 
                 if ($entry !== null) {
@@ -475,6 +562,7 @@ class ChangeService
             [
                 'status' => 'ok',
                 'id' => $id,
+                'parent' => (int) $operation['parent'],
                 'uri' => $resource ? (string) $resource->get('uri') : null,
                 'url' => $id > 0 ? $this->modx->makeUrl($id, $operation['context_key'], '', 'full') : null,
             ],

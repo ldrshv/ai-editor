@@ -6,7 +6,7 @@
  * ai_editor.api_key, ai_editor.allowed_ips, ai_editor.user.
  */
 return [
-    'version' => '1.1.0',
+    'version' => '1.2.0',
 
     // TV редактора блоков: не отдаётся и не меняется на этом этапе
     'blocks_tv' => 97,
@@ -65,5 +65,8 @@ return [
         'longtitle' => ['max' => 70],
         'description' => ['max' => 155],
     ],
+
+    // ID ресурсов, которые нельзя менять и в которых нельзя создавать страницы.
+    // 0 — запретить создание в корне сайта.
     'protected' => [],
 ];
