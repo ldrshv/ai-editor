@@ -134,9 +134,10 @@ class ChangeService
 
         $fieldsInput = $this->arrayParam($operation, 'fields');
         $tvsInput = $this->arrayParam($operation, 'tvs');
+        $blocksInput = $operation['blocks'] ?? null;
 
-        if ($fieldsInput === [] && $tvsInput === []) {
-            throw ApiException::validation('Передайте fields или tvs');
+        if ($fieldsInput === [] && $tvsInput === [] && empty($blocksInput)) {
+            throw ApiException::validation('Передайте fields, tvs или blocks');
         }
 
         $this->assertAllowedFields(array_keys($fieldsInput), (array) Settings::get('update_fields', []));
@@ -179,6 +180,10 @@ class ChangeService
             $finalTvs[$name] = $value;
         }
 
+        [$blockChanges, $blockWarnings] = $blocksInput !== null
+            ? $this->prepareBlocks($operation, $currentTvs, $tvs, $finalTvs)
+            : [[], []];
+
         // Права проверяем до согласия, а не только в процессоре при apply
         if ($fields !== [] || $tvs !== []) {
             $permissions = ['save_document'];
@@ -198,6 +203,7 @@ class ChangeService
 
         $warnings = array_merge(
             $warnings,
+            $blockWarnings,
             $this->standardWarnings($templateId, $final, $finalTvs, array_keys($fields))
         );
 
@@ -216,6 +222,10 @@ class ChangeService
         }
 
         foreach ($tvs as $name => $change) {
+            if (!empty($change['blocks'])) {
+                continue;
+            }
+
             $changes[] = $this->displayChange('tv:' . $name, $change['old'], $change['new']);
         }
 
@@ -229,7 +239,57 @@ class ChangeService
             'warnings' => $warnings,
         ];
 
+        if ($blockChanges !== []) {
+            $shown['blocks'] = $blockChanges;
+        }
+
         return [$internal, $shown];
+    }
+
+    /**
+     * Операции с блоками → новое значение TV блоков в $tvs (дальше — как обычный TV).
+     */
+    private function prepareBlocks(array $operation, array $currentTvs, array &$tvs, array &$finalTvs): array
+    {
+        $ops = $operation['blocks'];
+
+        if (!is_array($ops) || $ops === [] || array_keys($ops) !== range(0, count($ops) - 1)) {
+            throw ApiException::validation('blocks — непустой список операций', ['field' => 'blocks']);
+        }
+
+        $tvId = Blocks::tvId();
+        $name = null;
+
+        foreach ($currentTvs as $tvName => $tv) {
+            if ((int) $tv['id'] === $tvId) {
+                $name = (string) $tvName;
+                break;
+            }
+        }
+
+        if ($name === null) {
+            throw new ApiException('FIELD_NOT_ALLOWED', 'У шаблона ресурса нет TV блоков', 400);
+        }
+
+        $old = (string) $currentTvs[$name]['value'];
+        $hash = (string) ($operation['blocks_hash'] ?? '');
+
+        if ($hash === '') {
+            throw ApiException::validation('Передайте blocks_hash из get_resource', ['field' => 'blocks_hash']);
+        }
+
+        if (!hash_equals(Blocks::hash($old), $hash)) {
+            throw new ApiException('BLOCKS_CONFLICT', 'Блоки изменились после чтения, перечитайте get_resource', 409);
+        }
+
+        $result = (new Blocks($this->modx))->change($old, $ops);
+
+        if ($result['raw'] !== $old) {
+            $tvs[$name] = ['id' => $tvId, 'old' => $old, 'new' => $result['raw'], 'blocks' => true];
+            $finalTvs[$name] = $result['raw'];
+        }
+
+        return [$result['changes'], $result['warnings']];
     }
 
     /**
@@ -537,6 +597,22 @@ class ChangeService
             ], null];
         }
 
+        foreach ((array) $operation['tvs'] as $name => $change) {
+            if (empty($change['blocks'])) {
+                continue;
+            }
+
+            $now = $this->reader->tvValues($id, (int) $resource->get('template'))[$name]['value'] ?? null;
+
+            if (!Format::same($now, $change['old'])) {
+                return [[
+                    'status' => 'error',
+                    'code' => 'BLOCKS_CONFLICT',
+                    'message' => 'Блоки изменили после предпросмотра, сделайте новый предпросмотр',
+                ], null];
+            }
+        }
+
         $fields = [];
 
         foreach ((array) $operation['fields'] as $field => $change) {
@@ -718,7 +794,9 @@ class ChangeService
                 }
 
                 $tvs[(int) $values['id']] = $values['old'];
-                $shown[] = $this->displayChange('tv:' . $name, $now, $values['old']);
+                $shown[] = !empty($values['blocks'])
+                    ? ['field' => 'tv:' . $name, 'message' => 'Блоки вернутся к состоянию до правки']
+                    : $this->displayChange('tv:' . $name, $now, $values['old']);
             }
 
             $plan[] = ['op' => 'revert', 'id' => $id, 'pagetitle' => (string) $resource->get('pagetitle'), 'changes' => $shown,
