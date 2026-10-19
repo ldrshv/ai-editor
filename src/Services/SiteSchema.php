@@ -34,13 +34,14 @@ class SiteSchema
                 'php' => PHP_VERSION,
                 'packages' => $this->packages(),
             ],
+            'notes' => (string) Settings::get('notes', ''),
             'contexts' => $this->contexts(),
             'fields' => (array) Settings::get('fields', []),
             'editable' => [
                 'update_fields' => array_values((array) Settings::get('update_fields', [])),
                 'create_fields' => array_values((array) Settings::get('create_fields', [])),
                 'class_keys' => array_values((array) Settings::get('allowed_class_keys', [])),
-                'tvs' => 'Все TV шаблона, кроме TV блоков',
+                'tvs' => 'Все TV шаблона, кроме TV блоков (блоки — через blocks в preview_changes)',
             ],
             'page_types' => $this->pageTypes(),
             'limits' => (array) Settings::get('limits', []),
@@ -48,10 +49,7 @@ class SiteSchema
             'templates' => $this->templates(),
             'media_sources' => $this->mediaSources(),
             'protected' => Settings::protectedIds(),
-            'blocks' => [
-                'tv' => (int) Settings::get('blocks_tv', 0),
-                'editable' => false,
-            ],
+            'blocks' => $this->blocks(),
         ];
     }
 
@@ -118,6 +116,25 @@ class SiteSchema
                 'rank' => (int) $row['tv_rank'],
                 'editable' => $id !== $blocksTv,
             ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Блоки страницы: TV, форма MIGX с сайта, можно ли править.
+     */
+    private function blocks(): array
+    {
+        $result = ['tv' => Blocks::tvId(), 'editable' => Blocks::editable(), 'actions' => Blocks::ACTIONS];
+
+        try {
+            $form = (new Blocks($this->modx))->form();
+            $result['form_from'] = $form['from'];
+            $result['fields'] = $form['fields'];
+        } catch (ApiException $exception) {
+            $result['editable'] = false;
+            $result['error'] = ['code' => $exception->errorCode(), 'message' => $exception->getMessage()];
         }
 
         return $result;

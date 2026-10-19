@@ -2,6 +2,7 @@
 
 namespace AiEditor\Controllers;
 
+use AiEditor\Services\Blocks;
 use Zoomx\Controllers\Controller;
 
 /**
@@ -135,9 +136,15 @@ class Resources extends Controller
         }
 
         $tvs = [];
+        $blocks = null;
+        $blocksTv = Blocks::tvId();
         $collection = $r->getTemplateVars();
         if (is_array($collection) || $collection instanceof \Traversable) {
             foreach ($collection as $tv) {
+                if ($blocksTv > 0 && (int) $tv->get('id') === $blocksTv) {
+                    $blocks = (new Blocks($this->modx))->parse((string) $tv->get('value'));
+                    continue;
+                }
                 $tvs[$tv->get('name')] = [
                     'value' => $tv->get('value'),
                     'caption' => (string) $tv->get('caption'),
@@ -177,6 +184,7 @@ class Resources extends Controller
             'content_length' => $length,
             'content_truncated' => $truncated,
             'tvs' => $tvs,
+            'blocks' => $blocks,
             'protected' => $this->modx->getCount('modResourceGroupResource', ['document' => $id]) > 0,
         ]);
     }

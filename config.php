@@ -6,10 +6,14 @@
  * ai_editor.api_key, ai_editor.allowed_ips, ai_editor.user.
  */
 return [
-    'version' => '1.2.3',
+    'version' => '1.3.0',
 
-    // TV редактора блоков: не отдаётся и не меняется на этом этапе
+    // TV блоков страницы (MIGX). Поля и типы берутся из формы MIGX на сайте.
     'blocks_tv' => 97,
+    'blocks_editable' => true,
+
+    // Особенности сайта: свободный текст для ИИ и разработчика, отдаётся в get_site_info
+    'notes' => '',
 
     // Журнал изменений и предпросмотры
     'storage_path' => MODX_CORE_PATH . 'storage/ai-editor/',
