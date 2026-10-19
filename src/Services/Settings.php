@@ -3,7 +3,7 @@
 namespace AiEditor\Services;
 
 /**
- * Настройки модуля: config.php модуля + core/config/ai-editor.php сайта.
+ * Настройки модуля: значения по умолчанию из кода (Fields) + config.php модуля + core/config/ai-editor.php сайта.
  */
 class Settings
 {
@@ -17,7 +17,7 @@ class Settings
             $siteFile = MODX_CORE_PATH . 'config/ai-editor.php';
             $site = is_file($siteFile) ? require $siteFile : [];
 
-            self::$data = array_replace($module, is_array($site) ? $site : []);
+            self::$data = array_replace(Fields::defaults(), is_array($module) ? $module : [], is_array($site) ? $site : []);
         }
 
         return self::$data;

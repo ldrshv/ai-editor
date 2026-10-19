@@ -37,6 +37,7 @@ class SiteSchema
             'notes' => (string) Settings::get('notes', ''),
             'contexts' => $this->contexts(),
             'fields' => (array) Settings::get('fields', []),
+            'meta' => $this->meta(),
             'editable' => [
                 'update_fields' => array_values((array) Settings::get('update_fields', [])),
                 'create_fields' => array_values((array) Settings::get('create_fields', [])),
@@ -119,6 +120,40 @@ class SiteSchema
         }
 
         return $result;
+    }
+
+    /**
+     * Как шаблон E3 собирает title и description, если longtitle и description пусты,
+     * и текущие значения site_name и meta_city с главной (id 1, как в parts/00-head.tpl).
+     */
+    private function meta(): array
+    {
+        $siteName = '';
+        $city = '';
+
+        try {
+            /** @var \modResource|null $home */
+            $home = $this->modx->getObject('modResource', 1);
+
+            if ($home) {
+                $siteName = trim((string) $home->getTVValue('site_name'));
+                $city = trim((string) $home->getTVValue('meta_city'));
+            }
+        } catch (Throwable $exception) {
+            $siteName = '';
+        }
+
+        $suffix = 'Компания ' . $siteName . ($city !== '' ? ' ' . $city : '');
+
+        return Fields::META + [
+            'site_name' => $siteName,
+            'meta_city' => $city,
+            'example' => [
+                'title' => '{pagetitle} | ' . $suffix,
+                'description' => '{первые 100 символов content} | ' . $suffix . ' | {pagetitle}',
+                'description_without_content' => $suffix . ' | {pagetitle}',
+            ],
+        ];
     }
 
     /**
