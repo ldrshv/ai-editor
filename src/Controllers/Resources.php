@@ -16,6 +16,9 @@ class Resources extends Controller
 {
     private const MAX_LIMIT = 100;
 
+    // Поля, пустоту которых можно искать (empty)
+    private const EMPTY_FIELDS = ['longtitle', 'description', 'introtext', 'menutitle', 'content'];
+
     public function search()
     {
         if ($denied = $this->guard()) {
@@ -26,6 +29,13 @@ class Resources extends Controller
         $query = trim((string) ($input['query'] ?? ''));
         $limit = max(1, min(self::MAX_LIMIT, (int) ($input['limit'] ?? 20)));
         $offset = max(0, (int) ($input['offset'] ?? 0));
+
+        $empty = array_values(array_unique(array_map('strval', (array) ($input['empty'] ?? []))));
+        $unknown = array_values(array_diff($empty, self::EMPTY_FIELDS));
+
+        if ($unknown !== []) {
+            return $this->fail(400, 'VALIDATION_ERROR', 'empty: нельзя искать пустые ' . implode(', ', $unknown) . '. Можно: ' . implode(', ', self::EMPTY_FIELDS));
+        }
 
         $c = $this->modx->newQuery('modResource');
         $c->where(['deleted' => false]);
@@ -61,6 +71,15 @@ class Resources extends Controller
             $c->where(['context_key' => (string) $input['context']]);
         }
 
+        if (!empty($input['class_key'])) {
+            $c->where(['class_key:IN' => array_values(array_map('strval', (array) $input['class_key']))]);
+        }
+
+        // Пустое поле: NULL, '' или только пробелы. Имена полей — только из EMPTY_FIELDS.
+        foreach ($empty as $field) {
+            $c->where("TRIM(IFNULL(`modResource`.`{$field}`, '')) = ''");
+        }
+
         $total = (int) $this->modx->getCount('modResource', $c);
 
         $c->sortby('parent', 'ASC');
@@ -77,8 +96,10 @@ class Resources extends Controller
 
             $items[] = [
                 'id' => $id,
+                'class_key' => (string) $r->get('class_key'),
                 'pagetitle' => (string) $r->get('pagetitle'),
                 'longtitle' => (string) $r->get('longtitle'),
+                'description' => (string) $r->get('description'),
                 'menutitle' => (string) $r->get('menutitle'),
                 'alias' => (string) $r->get('alias'),
                 'uri' => (string) $r->get('uri'),
