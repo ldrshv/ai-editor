@@ -7,7 +7,7 @@
  * ai_editor.api_key, ai_editor.allowed_ips, ai_editor.user.
  */
 return [
-    'version' => '1.3.2',
+    'version' => '1.3.3',
 
     // TV блоков страницы (MIGX). Поля и типы берутся из формы MIGX на сайте.
     'blocks_tv' => 97,

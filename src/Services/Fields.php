@@ -21,8 +21,10 @@ final class Fields
     // Описание полей для ИИ
     public const DESCRIPTIONS = [
         'pagetitle' => 'H1 страницы и название в дереве; входит в автоматический Title',
-        'longtitle' => 'Свой Title. Пусто — шаблон выводит автоматический (см. meta.title)',
-        'description' => 'Свой meta description. Пусто — шаблон выводит автоматический (см. meta.description)',
+        'longtitle' => 'Title, заданный вручную, вместо автоматического (см. meta.title). Не заполнен — на сайте выводится автоматический Title. '
+            . 'Пишется без названия компании и сайта',
+        'description' => 'Meta description, заданный вручную, вместо автоматического (см. meta.description). '
+            . 'Не заполнен — на сайте выводится автоматический description',
         'introtext' => 'Анонс',
         'content' => 'Основной текст (HTML); из него собирается автоматический description',
         'menutitle' => 'Название в меню',
@@ -41,11 +43,14 @@ final class Fields
         'description' => ['max' => 155],
     ];
 
-    // Как шаблон E3 собирает title и description, если свои не заданы
+    // Как шаблон E3 собирает title и description, если longtitle и description не заполнены
     public const META = [
-        'title' => 'Если longtitle пуст: «{pagetitle} | Компания {site_name} {meta_city}»',
-        'description' => 'Если description пуст: «{первые 100 символов content без тегов} | Компания {site_name} {meta_city} | {pagetitle}»; '
-            . 'если пуст и content: «Компания {site_name} {meta_city} | {pagetitle}»',
+        'rule' => 'Title и description на странице есть всегда. Не заполненные longtitle и description значат, что выводятся автоматические значения, '
+            . 'а не что их нет: не называй такие страницы «без Title» или «без Description». '
+            . 'В longtitle не дописывай название компании и сайта — только суть страницы',
+        'title' => 'Автоматический Title, если longtitle не заполнен: «{pagetitle} | Компания {site_name} {meta_city}»',
+        'description' => 'Автоматический description, если description не заполнен: «{первые 100 символов content без тегов} | Компания {site_name} {meta_city} | {pagetitle}»; '
+            . 'если не заполнен и content: «Компания {site_name} {meta_city} | {pagetitle}»',
         'source' => 'site_name и meta_city — TV главной страницы (id 1), meta_city добавляется только если заполнен. Шаблон parts/00-head.tpl',
     ];
 
