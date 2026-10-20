@@ -2,7 +2,7 @@
 
 namespace AiEditor\Controllers;
 
-use AiEditor\Services\ChangeService;
+use AiEditor\Services\ChangePipeline;
 
 class Changes extends Controller
 {
@@ -10,7 +10,7 @@ class Changes extends Controller
     public function preview()
     {
         return $this->handle(function () {
-            return (new ChangeService($this->modx))->preview($this->body());
+            return (new ChangePipeline($this->modx))->preview($this->body());
         });
     }
 
@@ -18,7 +18,7 @@ class Changes extends Controller
     public function apply()
     {
         return $this->handle(function () {
-            return (new ChangeService($this->modx))->apply((string) ($this->body()['preview_id'] ?? ''));
+            return (new ChangePipeline($this->modx))->apply((string) ($this->body()['preview_id'] ?? ''));
         });
     }
 
@@ -26,7 +26,7 @@ class Changes extends Controller
     public function history()
     {
         return $this->handle(function () {
-            return (new ChangeService($this->modx))->history($_GET);
+            return (new ChangePipeline($this->modx))->history($_GET);
         });
     }
 
@@ -36,7 +36,7 @@ class Changes extends Controller
         return $this->handle(function () use ($id) {
             $body = $this->body();
 
-            return (new ChangeService($this->modx))->rollback(
+            return (new ChangePipeline($this->modx))->rollback(
                 (string) $id,
                 !array_key_exists('dry_run', $body) || !empty($body['dry_run']),
                 !empty($body['force'])

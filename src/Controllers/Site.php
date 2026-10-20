@@ -18,6 +18,12 @@ class Site extends Controller
                 'time' => date('c'),
                 // От кого пишем и какие права есть в mgr; ошибка настройки не ломает ping
                 'user' => (new ProcessorRunner($this->modx))->diagnostics(),
+                // Что нужно для загрузки картинок (op=file)
+                'media' => [
+                    'gd' => extension_loaded('gd'),
+                    'webp' => function_exists('imagewebp'),
+                    'curl' => function_exists('curl_init'),
+                ],
             ];
         });
     }
