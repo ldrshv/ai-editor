@@ -73,8 +73,10 @@ class ChangeService
                 } elseif ($op === 'create') {
                     [$internal, $shown] = $this->prepareCreate($index, $operation, $refs);
                     $refs[$internal['ref']] = $internal['context_key'];
+                } elseif ($op === 'file') {
+                    [$internal, $shown] = $this->prepareFile($index, $operation);
                 } else {
-                    throw ApiException::validation('op должен быть update или create');
+                    throw ApiException::validation('op должен быть update, create или file');
                 }
 
                 $prepared[] = $internal;
@@ -290,6 +292,53 @@ class ChangeService
         }
 
         return [$result['changes'], $result['warnings']];
+    }
+
+    /**
+     * Файл в медиаисточнике (пока только SVG). При apply записывается раньше остальных операций.
+     */
+    private function prepareFile(int $index, array $operation): array
+    {
+        $files = new Files($this->modx);
+        $path = $files->normalize((string) ($operation['path'] ?? ''));
+        [$content, $removed] = $files->sanitizeSvg((string) ($operation['content'] ?? ''));
+        $old = $files->read($path);
+
+        if ($old !== null && empty($operation['overwrite'])) {
+            throw new ApiException(
+                'FILE_EXISTS',
+                'Файл ' . $path . ' уже есть. Чтобы заменить его, передайте overwrite: true',
+                409,
+                ['path' => $path, 'url' => $files->url($path)]
+            );
+        }
+
+        $this->runner->assertCan([$old === null ? 'file_upload' : 'file_update'], [], 'запись файла ' . $path);
+
+        $warnings = [];
+
+        if ($removed !== []) {
+            $warnings[] = ['check' => 'svg_cleaned', 'message' => 'Из SVG удалено недопустимое: ' . implode(', ', $removed)];
+        }
+
+        if ($old !== null && $old === $content) {
+            $warnings[] = ['check' => 'no_changes', 'message' => 'Файл уже такой же, изменений нет'];
+        }
+
+        $internal = ['op' => 'file', 'path' => $path, 'content' => $content, 'old' => $old];
+
+        $shown = [
+            'index' => $index,
+            'op' => 'file',
+            'action' => $old === null ? 'create' : 'replace',
+            'path' => $path,
+            'url' => $files->url($path),
+            'size' => strlen($content),
+            'content' => $content,
+            'warnings' => $warnings,
+        ];
+
+        return [$internal, $shown];
     }
 
     /**
@@ -512,9 +561,34 @@ class ChangeService
         // ref => ID созданных в этом применении страниц
         $created = [];
 
+        // Сначала файлы: блоки и поля могут на них ссылаться. Если файл не записался, остальное не применяем.
+        $ordered = [];
+
         foreach ((array) $preview['operations'] as $index => $operation) {
+            if (($operation['op'] ?? '') === 'file') {
+                $ordered[$index] = $operation;
+            }
+        }
+
+        foreach ((array) $preview['operations'] as $index => $operation) {
+            if (($operation['op'] ?? '') !== 'file') {
+                $ordered[$index] = $operation;
+            }
+        }
+
+        $filesOk = true;
+
+        foreach ($ordered as $index => $operation) {
             try {
-                if ($operation['op'] === 'update') {
+                if ($operation['op'] === 'file') {
+                    [$result, $entry] = $this->applyFile($operation);
+
+                    if (($result['status'] ?? '') === 'error') {
+                        $filesOk = false;
+                    }
+                } elseif (!$filesOk) {
+                    throw new ApiException('FILE_NOT_WRITTEN', 'Файл из этого предпросмотра не записан, операция пропущена', 409);
+                } elseif ($operation['op'] === 'update') {
                     [$result, $entry] = $this->applyUpdate($operation);
                 } else {
                     if (!empty($operation['parent_ref'])) {
@@ -543,22 +617,42 @@ class ChangeService
                 }
             } catch (ApiException $exception) {
                 $result = ['status' => 'error', 'code' => $exception->errorCode(), 'message' => $exception->getMessage()];
+
+                if ($operation['op'] === 'file') {
+                    $filesOk = false;
+                }
             } catch (Throwable $exception) {
                 $this->modx->log(modX::LOG_LEVEL_ERROR, '[ai-editor] apply: ' . $exception->getMessage());
                 $result = ['status' => 'error', 'code' => 'INTERNAL_ERROR', 'message' => 'Ошибка применения, подробности в журнале MODX'];
+
+                if ($operation['op'] === 'file') {
+                    $filesOk = false;
+                }
             }
 
             $results[] = ['index' => $index, 'op' => $operation['op']]
                 + (isset($operation['id']) ? ['id' => $operation['id']] : [])
                 + (isset($operation['ref']) ? ['ref' => $operation['ref']] : [])
+                + (isset($operation['path']) ? ['path' => $operation['path']] : [])
                 + $result;
         }
 
+        usort($results, static function (array $a, array $b): int {
+            return $a['index'] <=> $b['index'];
+        });
+
         if ($journal !== []) {
             $resources = [];
+            $paths = [];
 
             foreach ($journal as $entry) {
-                $resources[] = (int) $entry['id'];
+                if (isset($entry['id'])) {
+                    $resources[] = (int) $entry['id'];
+                }
+
+                if (isset($entry['path'])) {
+                    $paths[] = (string) $entry['path'];
+                }
             }
 
             $this->storage->save('changes', $changeId, [
@@ -568,6 +662,7 @@ class ChangeService
                 'actor' => (string) ($preview['actor'] ?? ''),
                 'comment' => (string) ($preview['comment'] ?? ''),
                 'resources' => array_values(array_unique($resources)),
+                'files' => array_values(array_unique($paths)),
                 'operations' => $journal,
                 'rolled_back' => false,
             ]);
@@ -576,6 +671,38 @@ class ChangeService
         return [
             'change_id' => $journal !== [] ? $changeId : null,
             'results' => $results,
+        ];
+    }
+
+    private function applyFile(array $operation): array
+    {
+        $files = new Files($this->modx);
+        $path = (string) $operation['path'];
+        $now = $files->read($path);
+
+        if ($now !== ($operation['old'] ?? null)) {
+            return [[
+                'status' => 'error',
+                'code' => 'CONFLICT',
+                'message' => 'Файл ' . $path . ' изменили после предпросмотра, сделайте новый предпросмотр',
+            ], null];
+        }
+
+        if ($now === $operation['content']) {
+            return [['status' => 'skipped', 'message' => 'Файл уже такой же', 'url' => $files->url($path)], null];
+        }
+
+        if (!$files->write($path, (string) $operation['content'])) {
+            return [[
+                'status' => 'error',
+                'code' => 'FILE_WRITE_ERROR',
+                'message' => 'Не удалось записать файл ' . $path . ': проверьте права на папку медиаисточника',
+            ], null];
+        }
+
+        return [
+            ['status' => 'ok', 'url' => $files->url($path)],
+            ['op' => 'file', 'path' => $path, 'old' => $operation['old'] ?? null, 'new' => (string) $operation['content']],
         ];
     }
 
@@ -720,6 +847,7 @@ class ChangeService
                 'comment' => $change['comment'],
                 'operations' => count((array) $change['operations']),
                 'resources' => $change['resources'],
+                'files' => $change['files'] ?? [],
                 'rolled_back' => (bool) $change['rolled_back'],
             ];
         }
@@ -744,8 +872,26 @@ class ChangeService
 
         $plan = [];
         $conflicts = [];
+        $files = new Files($this->modx);
 
         foreach (array_reverse((array) $change['operations']) as $entry) {
+            if (($entry['op'] ?? '') === 'file') {
+                $path = (string) $entry['path'];
+                $now = $files->read($path);
+
+                if ($now !== $entry['new']) {
+                    $conflicts[] = ['path' => $path, 'message' => 'Файл изменили после правки'];
+                }
+
+                $plan[] = [
+                    'op' => $entry['old'] === null ? 'delete_file' : 'restore_file',
+                    'path' => $path,
+                    '_old' => $entry['old'],
+                ];
+
+                continue;
+            }
+
             $id = (int) $entry['id'];
             /** @var \modResource|null $resource */
             $resource = $this->modx->getObject('modResource', $id);
@@ -804,18 +950,31 @@ class ChangeService
         }
 
         $publicPlan = array_map(static function (array $item): array {
-            unset($item['_fields'], $item['_tvs']);
+            unset($item['_fields'], $item['_tvs'], $item['_old']);
 
             return $item;
         }, $plan);
 
-        // Права на откат: удаление созданных страниц и возврат полей
+        // Права на откат: удаление созданных страниц и файлов, возврат полей и файлов
         $permissions = [];
 
         foreach ($plan as $item) {
-            $permissions[] = $item['op'] === 'delete' ? 'delete_document' : 'save_document';
+            switch ($item['op']) {
+                case 'delete':
+                    $permissions[] = 'delete_document';
+                    break;
+                case 'delete_file':
+                    $permissions[] = 'file_remove';
+                    break;
+                case 'restore_file':
+                    $permissions[] = 'file_update';
+                    break;
+                default:
+                    $permissions[] = 'save_document';
+            }
         }
 
+        $permissions = array_values(array_unique($permissions));
         $missing = $permissions !== [] ? $this->runner->missing($permissions) : [];
 
         if ($dryRun) {
@@ -840,7 +999,7 @@ class ChangeService
         if ($conflicts !== [] && !$force) {
             throw new ApiException(
                 'CONFLICT',
-                'После изменения ресурсы правили ещё раз. Проверьте план (dry_run) и повторите с force: true',
+                'После изменения ресурсы или файлы правили ещё раз. Проверьте план (dry_run) и повторите с force: true',
                 409,
                 ['conflicts' => $conflicts]
             );
@@ -850,6 +1009,17 @@ class ChangeService
         $results = [];
 
         foreach ($plan as $item) {
+            if ($item['op'] === 'delete_file' || $item['op'] === 'restore_file') {
+                $ok = $item['op'] === 'delete_file'
+                    ? $files->delete($item['path'])
+                    : $files->write($item['path'], (string) $item['_old']);
+
+                $results[] = ['op' => $item['op'], 'path' => $item['path']]
+                    + ($ok ? ['status' => 'ok'] : ['status' => 'error', 'code' => 'FILE_WRITE_ERROR', 'message' => 'Не удалось изменить файл ' . $item['path']]);
+
+                continue;
+            }
+
             if ($item['op'] === 'delete') {
                 $response = $runner->run('resource/delete', ['id' => $item['id']]);
             } else {

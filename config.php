@@ -7,11 +7,14 @@
  * ai_editor.api_key, ai_editor.allowed_ips, ai_editor.user.
  */
 return [
-    'version' => '1.3.3',
+    'version' => '1.4.0',
 
     // TV блоков страницы (MIGX). Поля и типы берутся из формы MIGX на сайте.
     'blocks_tv' => 97,
     'blocks_editable' => true,
+
+    // Медиаисточник для файлов (op=file): на E3 — 3 «Файлы и изображения», папка assets/mgr/
+    'media_source' => 3,
 
     // Журнал изменений и предпросмотры
     'storage_path' => MODX_CORE_PATH . 'storage/ai-editor/',
