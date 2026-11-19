@@ -3,8 +3,8 @@
 namespace AiEditor\Services;
 
 /**
- * Поля ресурса для ИИ: что можно менять и задавать при создании, что значит каждое поле,
- * лимиты длин и как шаблон E3 собирает title и description (parts/00-head.tpl).
+ * Поля ресурса для ИИ: что можно менять и задавать при создании, что значит каждое поле
+ * и как шаблон E3 собирает title и description (parts/00-head.tpl).
  * Одинаково на всех сайтах E3; при необходимости сайт может переопределить ключи в core/config/ai-editor.php.
  */
 final class Fields
@@ -37,11 +37,8 @@ final class Fields
         'searchable' => 'Участвует в поиске (1/0)',
     ];
 
-    // Предупреждения о длине в предпросмотре
-    public const LIMITS = [
-        'longtitle' => ['max' => 70],
-        'description' => ['max' => 155],
-    ];
+    // Лимиты длин не задаются: предупреждений о длине в предпросмотре нет
+    public const LIMITS = [];
 
     // Как шаблон E3 собирает title и description, если longtitle и description не заполнены
     public const META = [
