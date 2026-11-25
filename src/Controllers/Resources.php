@@ -3,6 +3,7 @@
 namespace AiEditor\Controllers;
 
 use AiEditor\Services\Blocks;
+use AiEditor\Services\Products;
 use Zoomx\Controllers\Controller;
 
 /**
@@ -206,6 +207,8 @@ class Resources extends Controller
             'content_truncated' => $truncated,
             'tvs' => $tvs,
             'blocks' => $blocks,
+            // Товар miniShop2: поля, производитель, опции. null — не товар или miniShop2 не установлен.
+            'product' => (new Products($this->modx))->read($id, (string) $r->get('class_key')),
             'protected' => $this->modx->getCount('modResourceGroupResource', ['document' => $id]) > 0,
         ]);
     }
