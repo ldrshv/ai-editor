@@ -21,8 +21,9 @@ return [
     'preview_ttl' => 86400,
     'max_operations' => 200,
 
-    // Какие классы ресурсов можно менять и создавать
-    'allowed_class_keys' => ['modDocument'],
+    // Какие классы ресурсов можно менять. msProduct — товары miniShop2: пока только поля страницы и TV,
+    // поля самого товара (цена, артикул, опции) не пишутся. Создаются по-прежнему только modDocument.
+    'allowed_class_keys' => ['modDocument', 'msProduct'],
 
     // Настройки сайта — задаются в core/config/ai-editor.php
     'notes' => '',
